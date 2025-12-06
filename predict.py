@@ -12,19 +12,31 @@ def process_image(image):
     Takes in a NumPy image array and returns a processed image
     as a NumPy array with shape (224, 224, 3).
     """
-    img_tensor = tf.convert_to_tensor(image, dtype=tf.float32)
-    img_tensor = tf.image.resize(img_tensor, (224, 224))
-    img_tensor = img_tensor / 255.0
-    return img_tensor.numpy()
+    img = tf.convert_to_tensor(image, dtype=tf.float32)
+    img = tf.image.resize(img, (224, 224))
+    img = img / 255.0
+    return img.numpy()
 
 
 def predict(image_path, model, top_k=5):
     """
     Predict the top K most probable classes for an image.
 
-    Returns:
-        probs   -> Top K probability values (1D NumPy array)
-        classes -> Top K class indices as strings (e.g. ['70', '3', ...])
+    Parameters
+    ----------
+    image_path : str
+        Path to the image file.
+    model : tf.keras.Model
+        Trained Keras model.
+    top_k : int
+        Number of top predictions to return.
+
+    Returns
+    -------
+    probs : np.ndarray
+        Top K probabilities.
+    classes : list of str
+        Corresponding class indices as strings (matching label_map.json keys).
     """
     # Load image
     im = Image.open(image_path)
@@ -33,28 +45,33 @@ def predict(image_path, model, top_k=5):
     # Preprocess
     processed_image = process_image(np_image)
 
-    # Add batch dimension
+    # Add batch dimension: (224, 224, 3) -> (1, 224, 224, 3)
     input_tensor = np.expand_dims(processed_image, axis=0)
 
-    # Predict
-    preds = model.predict(input_tensor)
+    # Predictions
+    preds = model.predict(input_tensor)  # shape: (1, num_classes)
+    preds = np.squeeze(preds)           # shape: (num_classes,)
 
-    # Top K
+    # Ensure top_k is not larger than number of classes
+    top_k = min(top_k, preds.shape[0])
+
+    # Get top K
     top_probs, top_indices = tf.math.top_k(preds, k=top_k)
-    top_probs = top_probs.numpy().squeeze()
-    top_indices = top_indices.numpy().squeeze()
+    top_probs = top_probs.numpy()
+    top_indices = top_indices.numpy()
 
-    # +1 because label_map keys start at "1"
-    classes = [str(i + 1) for i in top_indices]
+    # IMPORTANT: NO +1 OFFSET
+    # label_map.json now starts at 0, so indices match directly
+    classes = [str(i) for i in top_indices]
 
     return top_probs, classes
 
 
-def load_category_names(path):
+def load_category_names(json_path):
     """
     Load a JSON file mapping label indices (as strings) to flower names.
     """
-    with open(path, 'r') as f:
+    with open(json_path, 'r') as f:
         class_names = json.load(f)
     return class_names
 
@@ -78,7 +95,6 @@ def parse_args():
                         type=int,
                         default=5,
                         help='Return the top K most likely classes.')
-
     parser.add_argument('--category_names',
                         type=str,
                         default=None,
@@ -88,10 +104,10 @@ def parse_args():
 
 
 def main():
-    # Parse command line arguments
+    # Parse CLI args
     args = parse_args()
 
-    # Load model (with KerasLayer from TF Hub)
+    # Load model (with TF Hub KerasLayer)
     model = tf.keras.models.load_model(
         args.model_path,
         custom_objects={'KerasLayer': hub.KerasLayer}
@@ -102,19 +118,21 @@ def main():
     if args.category_names is not None:
         class_names = load_category_names(args.category_names)
 
-    # Make prediction
+    # Predict
     probs, classes = predict(args.image_path, model, top_k=args.top_k)
 
     # Print results
     print("\nTop {} predictions for image: {}\n".format(args.top_k, args.image_path))
+
     for prob, cls in zip(probs, classes):
         if class_names is not None and cls in class_names:
-            label = class_names[cls]
+            label = class_names[cls]   # NO +1 HERE
         else:
-            label = cls  # fallback to class index
+            label = cls               # fallback to raw index
+
         print(f"{label:30s} : {prob:.4f}")
 
-    print()  # blank line at the end
+    print()  # blank line
 
 
 if __name__ == '__main__':
